@@ -28,7 +28,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
       // Local row: use eventCards helper data (price/delta from DB snapshots);
       // no resale snapshot yet → fall back to TM face price
       const card = localCardsByEventId.get(`/event/${l.id}`)!;
-      return card.price != null ? card : { ...card, price: r.priceLow != null ? `$${r.priceLow}` : null };
+      return card.price != null ? card : { ...card, price: r.priceLow != null ? `$${r.priceLow.toFixed(2)}` : null };
     } else {
       // Untracked TM result: raw price, no delta
       return {
@@ -36,7 +36,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
         name: r.name, venue: r.venue,
         dateLabel: r.startsAt.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
         artworkUrl: r.artworkUrl,
-        price: r.priceLow != null ? `$${r.priceLow}` : null, delta: null,
+        price: r.priceLow != null ? `$${r.priceLow.toFixed(2)}` : null, delta: null,
       };
     }
   });

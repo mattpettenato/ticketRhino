@@ -18,7 +18,7 @@ export async function eventCards(eventRows: (typeof schema.events.$inferSelect)[
       href: `/event/${ev.id}`, name: ev.name, venue: ev.venue,
       dateLabel: ev.startsAt.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
       artworkUrl: ev.artworkUrl,
-      price: latest ? `$${latest.priceLow}` : null,
+      price: latest ? `$${latest.priceLow.toFixed(2)}` : null,
       delta: delta24h(points, now),
     };
   }));

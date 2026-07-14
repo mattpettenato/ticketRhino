@@ -1,5 +1,6 @@
 import { and, asc, eq, gte } from "drizzle-orm";
 import { cookies } from "next/headers";
+import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { delta24h, isLowest30d, schema, SnapPoint, weekDelta } from "@ticketrhino/core";
 import { getClients } from "@/lib/clients";
@@ -12,6 +13,7 @@ export const metadata: Metadata = { robots: { index: false } }; // spec §7: noi
 
 export default async function EventPage({ params }: { params: Promise<{ id: string }> }) {
   const id = Number((await params).id);
+  if (!Number.isInteger(id)) notFound(); // /event/abc → 404, not a 500 from a NaN query
   const { db } = getClients();
   const [ev] = await db.select().from(schema.events).where(eq(schema.events.id, id));
   if (!ev) return <p className="mt-8 text-center text-gray-400">Event not found</p>;
@@ -23,6 +25,17 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
 
   const resaleSnaps = snaps.filter((s) => s.source === "seatgeek" && s.priceLow != null);
   const points: SnapPoint[] = resaleSnaps.map((s) => ({ pollBucket: s.pollBucket, priceLow: Number(s.priceLow) }));
+
+  // Chart bars: daily-minimum buckets (≤30 bars over 30 days). Signals keep the raw hourly
+  // `points` below — do NOT feed them these aggregated points.
+  const dailyMin = new Map<number, SnapPoint>();
+  for (const p of points) {
+    const d = p.pollBucket;
+    const key = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    const cur = dailyMin.get(key);
+    if (!cur || p.priceLow < cur.priceLow) dailyMin.set(key, { pollBucket: new Date(key), priceLow: p.priceLow });
+  }
+  const dailyPoints = [...dailyMin.values()].sort((a, b) => a.pollBucket.getTime() - b.pollBucket.getTime());
   const latestResale = resaleSnaps.at(-1) ?? null;
   const latestPrimary = snaps.filter((s) => s.source === "tm").at(-1) ?? null;
   const latest = [latestResale, latestPrimary].filter(Boolean)
@@ -76,7 +89,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
       <div>
         <div className="label-caps mb-2">RESALE LOW — 30 DAYS</div>
         {spanMs >= 48 * 3_600_000
-          ? <HistoryChart points={points} />
+          ? <HistoryChart points={dailyPoints} />
           : null}
         <p className="mt-1 text-[10px] text-gray-500">
           history building since {(points[0]?.pollBucket ?? ev.trackedAt ?? new Date()).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
