@@ -23,6 +23,11 @@ export async function trackEvent(
 
     const needsSlot = !existing || !existing.polling_enabled;
     if (needsSlot) {
+      // Serialize cap-consuming tracks: poolCount() is a READ COMMITTED snapshot and the
+      // per-event FOR UPDATE doesn't guard the global pool, so two txns tracking distinct new
+      // events could both read count 99 and both commit (pool 101). Key 1 = the single global
+      // pool; auto-released at commit/rollback. Only the needs-slot path pays it. (spec §6)
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(1)`);
       const poolCount = async () => Number((await tx.execute(sql`
         SELECT count(*)::int AS c FROM events WHERE polling_enabled AND NOT is_seed`)).rows[0].c);
       if (await poolCount() >= USER_POOL_CAP) {

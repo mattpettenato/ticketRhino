@@ -51,6 +51,24 @@ test("global cap full: purge of started events frees a slot; else reject", async
   expect(purged.rows[0].polling_enabled).toBe(false);
 });
 
+test("concurrent tracks at cap 99: exactly one succeeds, pool stays at 100", async () => {
+  // fill pool to 99 distinct future events (5 per user, same pattern as global-cap test)
+  for (let i = 0; i < USER_POOL_CAP - 1; i++)
+    expect((await trackEvent(db, `filler-${Math.floor(i / 5)}`, tmEv(i), sgNone)).ok).toBe(true);
+  // two concurrent tracks for distinct NEW events from distinct anon IDs; advisory xact lock
+  // serializes the cap check so exactly one wins.
+  const [a, b] = await Promise.all([
+    trackEvent(db, "race-a", tmEv(900), sgNone),
+    trackEvent(db, "race-b", tmEv(901), sgNone),
+  ]);
+  const oks = [a, b].filter((r) => r.ok).length;
+  expect(oks).toBe(1);
+  expect([a, b].filter((r) => !r.ok && r.reason === "global_cap")).toHaveLength(1);
+  const [{ c }] = (await db.execute(sql`
+    SELECT count(*)::int AS c FROM events WHERE polling_enabled AND NOT is_seed`)).rows;
+  expect(Number(c)).toBe(100);
+});
+
 test("untrack: polling stays on while other watchers remain, off when last leaves", async () => {
   const r1 = await trackEvent(db, "u1", tmEv(1), sgNone) as any;
   await trackEvent(db, "u2", tmEv(1), sgNone);
