@@ -1,5 +1,6 @@
 .superpowers/
 .env*
+.dev.vars
 node_modules/
 .next/
 dist/
