@@ -19,6 +19,9 @@ importers:
       next:
         specifier: 16.2.10
         version: 16.2.10(@playwright/test@1.61.1)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      pg:
+        specifier: ^8.13.0
+        version: 8.22.0
       react:
         specifier: 19.2.4
         version: 19.2.4
@@ -35,6 +38,9 @@ importers:
       '@types/node':
         specifier: ^20
         version: 20.19.43
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.20.0
       '@types/react':
         specifier: ^19
         version: 19.2.17
