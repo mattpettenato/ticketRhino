@@ -2,6 +2,9 @@ import { inArray } from "drizzle-orm";
 import { schema } from "@ticketrhino/core";
 import { getClients } from "@/lib/clients";
 import { CardData, EventCard } from "@/components/EventCard";
+import { eventCards } from "@/lib/cards";
+
+export const revalidate = 0;
 
 export default async function SearchPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const { q } = await searchParams;
@@ -15,15 +18,25 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     .where(inArray(schema.events.tmId, results.map((r) => r.tmId)));
   const byTmId = new Map(local.map((e) => [e.tmId, e]));
 
+  // Build card data: local rows via eventCards helper (with price history), untracked via raw TM
+  const localCards = await eventCards(Array.from(byTmId.values()));
+  const localCardsByEventId = new Map(localCards.map((c) => [c.href, c])); // map by /event/:id href
+
   const cards: CardData[] = results.map((r) => {
     const l = byTmId.get(r.tmId);
-    return {
-      href: l ? `/event/${l.id}` : `/event/tm/${r.tmId}`,
-      name: r.name, venue: r.venue,
-      dateLabel: r.startsAt.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      artworkUrl: r.artworkUrl,
-      price: r.priceLow != null ? `$${r.priceLow}` : null, delta: null,
-    };
+    if (l) {
+      // Local row: use eventCards helper data (price/delta from DB snapshots)
+      return localCardsByEventId.get(`/event/${l.id}`)!;
+    } else {
+      // Untracked TM result: raw price, no delta
+      return {
+        href: `/event/tm/${r.tmId}`,
+        name: r.name, venue: r.venue,
+        dateLabel: r.startsAt.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        artworkUrl: r.artworkUrl,
+        price: r.priceLow != null ? `$${r.priceLow}` : null, delta: null,
+      };
+    }
   });
   return <div>{cards.map((c) => <EventCard key={c.href} ev={c} />)}</div>;
 }
