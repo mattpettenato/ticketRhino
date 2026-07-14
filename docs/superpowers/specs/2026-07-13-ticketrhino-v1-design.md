@@ -198,7 +198,7 @@ price_snapshots
 | Failure | Behavior |
 |---|---|
 | Upstream 429/5xx in poller | backoff, per-source error count, 6h cooldown, auto-recover |
-| Worker dies mid-batch | per-event commits + idempotent bucket key → safe re-run |
+| Worker dies mid-batch | 9-min lease + idempotent bucket key → safe re-run |
 | Cron overlap | lease-claim (`SKIP LOCKED` + 9-min lease), runs claim disjoint rows |
 | Neon unreachable from web | error boundary page, "prices paused" message |
 | Bad/missing API data | skip snapshot, log, never write partial garbage |
