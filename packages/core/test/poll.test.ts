@@ -67,6 +67,41 @@ test("runPollCycle: success writes snapshot + resets error, failure increments",
   expect(badState.errorCount).toBe(1);
   // TM cadence = +2h (minus nothing): next poll ~2h out, beyond the 9-min lease
   expect(okState.nextPollAt.getTime()).toBeGreaterThan(Date.now() + 100 * 60_000);
+  // Failed row's nextPollAt pushed to cadence (9 min from claim), not left due
+  expect(badState.nextPollAt.getTime()).toBeGreaterThan(Date.now() + 8 * 60_000);
+});
+
+test("runPollCycle: seatgeek path — fetches via getEventStats, stores priceAvg/listingCount, cadence 1h", async () => {
+  const ev = await seedEvent({ sgId: "sg-123" });
+  // Override the default TM state row to be SG
+  await db.delete(eventSourceState).where(sql`event_id = ${ev.id}`);
+  await db.insert(eventSourceState).values({ eventId: ev.id, source: "seatgeek" });
+
+  const tm = { getEvent: vi.fn() } as any;
+  const sg = { getEventStats: vi.fn(async (id: string) =>
+    id === "sg-123"
+      ? { priceLow: 50, priceHigh: 200, priceAvg: 125, listingCount: 42 }
+      : null
+  ) } as any;
+
+  const res = await runPollCycle(db, tm, sg);
+  expect(res).toEqual({ polled: 1, failed: 0 });
+
+  const snaps = await db.select().from(priceSnapshots);
+  expect(snaps).toHaveLength(1);
+  expect(snaps[0]).toMatchObject({
+    eventId: ev.id,
+    source: "seatgeek",
+    priceAvg: "125.00", // stored as numeric string with scale=2
+    listingCount: 42,
+  });
+
+  const state = await db.select().from(eventSourceState).where(sql`event_id = ${ev.id}`);
+  expect(state[0].errorCount).toBe(0);
+  // SG cadence = +1h: next poll ~1h out (assert > 50min, < 70min to account for execution time)
+  const nextPollMs = state[0].nextPollAt.getTime();
+  expect(nextPollMs).toBeGreaterThan(Date.now() + 50 * 60_000);
+  expect(nextPollMs).toBeLessThan(Date.now() + 70 * 60_000);
 });
 
 test("subrequest budget: 45 claimed rows -> exactly 45 fetches", async () => {
