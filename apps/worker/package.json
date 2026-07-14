@@ -1,0 +1,16 @@
+{
+  "name": "@ticketrhino/worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --test-scheduled"
+  },
+  "dependencies": { "@ticketrhino/core": "workspace:*" },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250601.0",
+    "typescript": "^5.8.0", "vitest": "^3.2.0", "wrangler": "^4.0.0"
+  }
+}
