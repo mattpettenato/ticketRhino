@@ -45,10 +45,13 @@ export async function runNightly(
     let added = 0;
     for (const ev of popular) {
       if (added >= room) break;
-      const existing = await db.select({ id: events.id }).from(events).where(eq(events.tmId, ev.tmId));
-      const isNew = existing.length === 0;
+      const [existing] = await db.select({ isSeed: events.isSeed }).from(events).where(eq(events.tmId, ev.tmId));
+      const becameSeed = !existing?.isSeed; // new row OR existing non-seed → this run turns it into a seed
       const id = await upsertTmEvent(db, ev, { isSeed: true });
-      if (isNew) { added++; await matchSeatGeek(db, id, sg); }
+      if (becameSeed) added++; // every is_seed transition counts against the budget, not just inserts
+      if (!existing) {
+        try { await matchSeatGeek(db, id, sg); } catch { /* retried by nightly pass */ }
+      }
     }
   }
 
@@ -59,5 +62,7 @@ export async function runNightly(
       AND (matched_at IS NULL OR matched_at < now() - interval '24 hours')
     ORDER BY matched_at NULLS FIRST LIMIT ${SG_RETRY_LIMIT}
   `)).rows as { id: number }[];
-  for (const { id } of unmatched) await matchSeatGeek(db, id, sg);
+  for (const { id } of unmatched) {
+    try { await matchSeatGeek(db, id, sg); } catch { /* retried by nightly pass */ }
+  }
 }

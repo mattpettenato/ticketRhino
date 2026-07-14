@@ -54,6 +54,39 @@ test("seed refresh fills up to budget, never beyond, attempts SG match per new e
   expect(tmStates).toHaveLength(SEED_BUDGET);
 });
 
+test("seed budget counts is_seed flips, not just inserts — never exceeds budget", async () => {
+  // 45 existing seeds (room = 5) + 5 existing NON-seed events that reappear in popular().
+  // Flipping those 5 to is_seed must consume the budget so no new seeds are added → total 50, not 55.
+  await db.insert(events).values(
+    Array.from({ length: 45 }, (_, i) => ({
+      tmId: `seed-${i}`, name: `Seed ${i}`, startsAt: future, isSeed: true, pollingEnabled: true,
+    })));
+  const nonSeed = Array.from({ length: 5 }, (_, i) => tmEv(100 + i));
+  await db.insert(events).values(
+    nonSeed.map((e) => ({ tmId: e.tmId, name: e.name, startsAt: future, isSeed: false })));
+  // popular: the 5 non-seed events (flips) first, then 5 brand-new events.
+  const popular = [...nonSeed, ...Array.from({ length: 5 }, (_, i) => tmEv(200 + i))];
+  const tm = { popular: vi.fn().mockResolvedValue(popular) } as any;
+  const sg = { searchCandidates: vi.fn().mockResolvedValue([]) } as any;
+  await runNightly(db, tm, sg);
+  const [{ count }] = (await db.execute(sql`SELECT count(*)::int AS count FROM events WHERE is_seed`)).rows as any[];
+  expect(count).toBe(SEED_BUDGET);
+});
+
+test("per-event match failure is isolated: other events + retry pass still run", async () => {
+  const tm = { popular: vi.fn().mockResolvedValue([tmEv(0), tmEv(1), tmEv(2)]) } as any;
+  const sg = {
+    searchCandidates: vi.fn().mockImplementation((artist: string) => {
+      if (artist === "Artist 0") throw new Error("network boom");
+      return Promise.resolve([]);
+    }),
+  } as any;
+  await expect(runNightly(db, tm, sg)).resolves.toBeUndefined();
+  // All 3 events attempted in the seed loop despite ev0 throwing; ev0 (still unmatched) retried once more.
+  expect(sg.searchCandidates).toHaveBeenCalledTimes(4);
+  expect(await db.select().from(events)).toHaveLength(3);
+});
+
 test("upsertTmEvent is idempotent on tm_id", async () => {
   const a = await upsertTmEvent(db, tmEv(1) as any, { isSeed: false });
   const b = await upsertTmEvent(db, tmEv(1) as any, { isSeed: false });
