@@ -8,6 +8,13 @@
       "when": 1784007581010,
       "tag": "0000_solid_hammerhead",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784009207466,
+      "tag": "0001_chief_red_skull",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 import {
   bigserial, boolean, char, index, integer, numeric, pgTable, primaryKey,
-  real, serial, text, timestamp, uniqueIndex,
+  real, serial, text, timestamp, unique, uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -24,7 +24,7 @@ export const events = pgTable("events", {
   pollingEnabled: boolean("polling_enabled").notNull().default(false), // invariant: is_seed OR watchers > 0
   trackedAt: timestamp("tracked_at", { withTimezone: true }),
 }, (t) => [
-  uniqueIndex("events_tm_id_uq").on(t.tmId).where(sql`tm_id IS NOT NULL`),
+  unique("events_tm_id_uq").on(t.tmId),
   uniqueIndex("events_sg_id_uq").on(t.sgId).where(sql`sg_id IS NOT NULL`),
   index("events_poll_idx").on(t.pollingEnabled, t.startsAt),
 ]);
