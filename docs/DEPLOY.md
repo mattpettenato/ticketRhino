@@ -61,6 +61,14 @@ vercel --prod
 - [ ] Wait ≥20 min; run `select count(*) from price_snapshots;` — count should be growing. Poll cadence: TM rows ~2h apart, SG ~1h.
 - [ ] Verify `robots.txt` is served; event page has `noindex` meta.
 
+## Manual follow-up: Ticketmaster attribution logo
+
+The footer (`apps/web/src/app/layout.tsx`) references `/tm-logo.svg`, which is **not** in the
+repo — spec §2 requires the *official* Ticketmaster brand mark, and no fabricated logo may be
+committed. Before launch, download the official asset from Ticketmaster's brand/attribution
+guidelines and save it as `apps/web/public/tm-logo.svg` (or `.png`, updating the `<img src>`).
+Until then the footer shows the image `alt` text.
+
 ## Step 6: Commit runbook + share
 
 ```bash

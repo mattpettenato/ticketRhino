@@ -48,6 +48,7 @@ Accounts/auth · price alerts/notifications · sell-side analytics · StubHub/Vi
 - One public GitHub repo, two deploy targets: Vercel (web) + Wrangler (worker).
 - Monorepo layout: `apps/web` (Next.js), `apps/worker` (poller), `packages/db` (Drizzle schema + client, shared).
 - Secrets: TM/SeatGeek keys + `DATABASE_URL` in Cloudflare Worker secrets; Vercel gets `DATABASE_URL` + TM key (live search is server-side in Next.js). Nothing in the repo.
+  - _[post-review amendment] Vercel also needs `SG_CLIENT_ID`: the track-time SeatGeek match runs in the Next.js server action, not only in the Worker._
 - Cost: $0/month (Vercel Hobby, Neon free, Cloudflare Workers free).
 
 ### Why cron every 10 minutes, not hourly batch
@@ -167,6 +168,7 @@ price_snapshots
 
 **Pages (3):**
 1. **Home/Explore** — logo + watchlist link; search bar; genre chips; TRENDING grid of event cards (artwork thumb, serif title, venue/date, mono best-resale price + 24h % delta)
+   - _[post-review amendment] Genre chips are deferred out of V1 (plan-owner decision); Home ships with search + TRENDING only._
 2. **Event detail** — hero artwork w/ title overlay; signal chip row ("↓ Lowest in 30 days") + staleness badge ("updated 42 min ago"); PRIMARY row (TM face range) + RESALE row (SG from/avg/high + listing count) as separate labeled cards; 30-day resale-low chart; "history building since <date>" caption; Track button
 3. **Watchlist** — tracked events list, sorted by biggest 24h movers; empty state → CTA to trending
 
