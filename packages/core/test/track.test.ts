@@ -37,6 +37,27 @@ test("second watcher on same event consumes no slot and succeeds", async () => {
   expect(await db.select().from(events)).toHaveLength(1);
 });
 
+test("re-tracking an already-polled event at pool cap succeeds without consuming a slot", async () => {
+  for (let i = 0; i < USER_POOL_CAP; i++)
+    expect((await trackEvent(db, `filler-${Math.floor(i / 5)}`, tmEv(i), sgNone)).ok).toBe(true);
+  // tm-0 is already polling; a NEW user tracking it needs no slot → succeeds even at cap.
+  const res = await trackEvent(db, "newbie", tmEv(0), sgNone);
+  expect(res.ok).toBe(true);
+  const [{ c }] = (await db.execute(sql`
+    SELECT count(*)::int AS c FROM events WHERE polling_enabled AND NOT is_seed`)).rows;
+  expect(Number(c)).toBe(USER_POOL_CAP); // pool unchanged — no slot consumed
+});
+
+test("user at cap re-tracking one of their own picks no-ops instead of rejecting", async () => {
+  for (let i = 0; i < PER_USER_CAP; i++) expect((await trackEvent(db, "u1", tmEv(i), sgNone)).ok).toBe(true);
+  // u1 is at 20. Re-tracking tm-0 (already theirs) must succeed, not hit user_cap.
+  const res = await trackEvent(db, "u1", tmEv(0), sgNone);
+  expect(res.ok).toBe(true);
+  const [{ c }] = (await db.execute(sql`
+    SELECT count(*)::int AS c FROM watchlist_events WHERE anon_id = 'u1'`)).rows;
+  expect(Number(c)).toBe(PER_USER_CAP); // still exactly 20 — no duplicate row, no rejection
+});
+
 test("global cap full: purge of started events frees a slot; else reject", async () => {
   // fill pool with 100 distinct future user-tracked events across users (5 per user)
   for (let i = 0; i < USER_POOL_CAP; i++)

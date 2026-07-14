@@ -1,4 +1,4 @@
-import { fetchWithBackoff } from "./backoff";
+import { fetchWithBackoff, type FetchBudget } from "./backoff";
 
 export type SgStats = {
   sgId: string; priceLow: number | null; priceAvg: number | null;
@@ -19,15 +19,15 @@ function parseStats(e: any): SgStats {
 }
 
 export function sgClient(clientId: string, fetchFn: typeof fetch = fetch) {
-  const get = async (path: string, params: Record<string, string>) => {
+  const get = async (path: string, params: Record<string, string>, budget?: FetchBudget) => {
     const qs = new URLSearchParams({ ...params, client_id: clientId });
-    const res = await fetchWithBackoff(fetchFn, `${BASE}${path}?${qs}`);
-    if (!res.ok) return null;
+    const res = await fetchWithBackoff(fetchFn, `${BASE}${path}?${qs}`, undefined, 3, 500, budget);
+    if (!res || !res.ok) return null;
     return res.json() as Promise<any>;
   };
   return {
-    async getEventStats(sgId: string): Promise<SgStats | null> {
-      const body = await get(`/events/${encodeURIComponent(sgId)}`, {});
+    async getEventStats(sgId: string, budget?: FetchBudget): Promise<SgStats | null> {
+      const body = await get(`/events/${encodeURIComponent(sgId)}`, {}, budget);
       return body?.id ? parseStats(body) : null;
     },
     async searchCandidates(artistOrName: string, around: Date): Promise<SgCandidate[]> {

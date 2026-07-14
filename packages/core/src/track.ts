@@ -14,12 +14,20 @@ export async function trackEvent(
   db: any, anonId: string, tmEvent: TmEvent, sg: ReturnType<typeof sgClient>,
 ): Promise<TrackResult> {
   const result: TrackResult = await db.transaction(async (tx: any) => {
+    const existing = (await tx.execute(sql`
+      SELECT id, polling_enabled FROM events WHERE tm_id = ${tmEvent.tmId} FOR UPDATE`)).rows[0];
+
+    // Re-tracking an event already on this user's watchlist is a no-op that must NOT be rejected
+    // by the per-user cap (a user at 20 re-tapping an existing pick should succeed). Checked first.
+    if (existing) {
+      const dup = (await tx.execute(sql`
+        SELECT 1 FROM watchlist_events WHERE anon_id = ${anonId} AND event_id = ${existing.id}`)).rows[0];
+      if (dup) return { ok: true, eventId: Number(existing.id) };
+    }
+
     const [{ mine }] = (await tx.execute(sql`
       SELECT count(*)::int AS mine FROM watchlist_events WHERE anon_id = ${anonId}`)).rows;
     if (Number(mine) >= PER_USER_CAP) return { ok: false, reason: "user_cap" };
-
-    const existing = (await tx.execute(sql`
-      SELECT id, polling_enabled FROM events WHERE tm_id = ${tmEvent.tmId} FOR UPDATE`)).rows[0];
 
     const needsSlot = !existing || !existing.polling_enabled;
     if (needsSlot) {

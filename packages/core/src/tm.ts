@@ -1,4 +1,4 @@
-import { fetchWithBackoff } from "./backoff";
+import { fetchWithBackoff, type FetchBudget } from "./backoff";
 
 export type TmEvent = {
   tmId: string; name: string; artist: string | null; venue: string | null;
@@ -26,15 +26,15 @@ function parseEvent(e: any): TmEvent | null {
 }
 
 export function tmClient(apiKey: string, fetchFn: typeof fetch = fetch) {
-  const get = async (path: string, params: Record<string, string>) => {
+  const get = async (path: string, params: Record<string, string>, budget?: FetchBudget) => {
     const qs = new URLSearchParams({ ...params, countryCode: "US", apikey: apiKey });
-    const res = await fetchWithBackoff(fetchFn, `${BASE}${path}?${qs}`);
-    if (!res.ok) return null;
+    const res = await fetchWithBackoff(fetchFn, `${BASE}${path}?${qs}`, undefined, 3, 500, budget);
+    if (!res || !res.ok) return null;
     return res.json() as Promise<any>;
   };
   return {
-    async getEvent(tmId: string): Promise<TmEvent | null> {
-      const body = await get(`/events/${encodeURIComponent(tmId)}.json`, {});
+    async getEvent(tmId: string, budget?: FetchBudget): Promise<TmEvent | null> {
+      const body = await get(`/events/${encodeURIComponent(tmId)}.json`, {}, budget);
       return body ? parseEvent(body) : null;
     },
     async search(keyword: string): Promise<TmEvent[]> {

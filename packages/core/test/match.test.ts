@@ -21,6 +21,14 @@ test("wrong venue and shifted date scores below threshold", () => {
   expect(scoreCandidate(ev, c)).toBeLessThan(MATCH_THRESHOLD);
 });
 
+test("score at exactly the 0.8 threshold matches (boundary is inclusive)", () => {
+  // artist 1·0.5 + venue 1·0.3 + date 0 (exactly +1 day) = 0.8
+  const evb = { artist: "SZA", name: "SZA Tour", venue: "MSG", startsAt: starts };
+  const c = cand({ title: "SZA", venue: "MSG", startsAt: new Date("2026-08-22T20:00:00Z") });
+  expect(scoreCandidate(evb, c)).toBeCloseTo(0.8, 10);
+  expect(scoreCandidate(evb, c)).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+});
+
 beforeEach(async () => {
   await db.execute(sql`TRUNCATE price_snapshots, watchlist_events, event_source_state, events RESTART IDENTITY CASCADE`);
 });
@@ -34,6 +42,27 @@ test("matchSeatGeek links and creates seatgeek source row", async () => {
   expect(updated.matchMethod).toBe("fuzzy");
   const states = await db.select().from(eventSourceState);
   expect(states).toEqual([expect.objectContaining({ eventId: row.id, source: "seatgeek" })]);
+});
+
+test("matchSeatGeek links at exactly the threshold", async () => {
+  const [row] = await db.insert(events).values({
+    artist: "SZA", name: "SZA Tour", venue: "MSG", tmId: "tmb", startsAt: starts,
+  }).returning();
+  const c = cand({ title: "SZA", venue: "MSG", startsAt: new Date("2026-08-22T20:00:00Z") });
+  const sg = { searchCandidates: vi.fn().mockResolvedValue([c]) } as any;
+  expect(await matchSeatGeek(db, row.id, sg)).toBe(true);
+});
+
+test("matchSeatGeek never clobbers a manual/exact link", async () => {
+  const [row] = await db.insert(events).values({
+    ...ev, tmId: "tm1", startsAt: starts, sgId: "manual-99", matchMethod: "manual",
+  }).returning();
+  const sg = { searchCandidates: vi.fn().mockResolvedValue([cand({ sgId: "55" })]) } as any;
+  await matchSeatGeek(db, row.id, sg);
+  const [after] = await db.select().from(events);
+  expect(after.sgId).toBe("manual-99");
+  expect(after.matchMethod).toBe("manual");
+  expect(sg.searchCandidates).not.toHaveBeenCalled(); // early-out on an existing sg link
 });
 
 test("no candidates: sets matched_at, returns false, no source row", async () => {

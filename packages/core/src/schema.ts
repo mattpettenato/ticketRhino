@@ -1,5 +1,5 @@
 import {
-  bigserial, boolean, char, index, integer, numeric, pgTable, primaryKey,
+  bigserial, boolean, char, check, index, integer, numeric, pgTable, primaryKey,
   real, serial, text, timestamp, unique, uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -39,6 +39,7 @@ export const eventSourceState = pgTable("event_source_state", {
 }, (t) => [
   primaryKey({ columns: [t.eventId, t.source] }),
   index("ess_next_poll_idx").on(t.nextPollAt),
+  check("ess_source_ck", sql`${t.source} IN ('tm', 'seatgeek')`),
 ]);
 
 export const watchlistEvents = pgTable("watchlist_events", {
@@ -62,4 +63,5 @@ export const priceSnapshots = pgTable("price_snapshots", {
   uniqueIndex("snap_idem_uq").on(t.eventId, t.source, t.pollBucket),
   index("snap_bucket_idx").on(t.pollBucket),
   index("snap_event_bucket_idx").on(t.eventId, t.pollBucket.desc()),
+  check("snap_source_ck", sql`${t.source} IN ('tm', 'seatgeek')`),
 ]);

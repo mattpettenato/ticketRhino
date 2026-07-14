@@ -104,6 +104,18 @@ test("runPollCycle: seatgeek path — fetches via getEventStats, stores priceAvg
   expect(nextPollMs).toBeLessThan(Date.now() + 70 * 60_000);
 });
 
+test("TM cancelled status flips event_status and stops future claims (write path only)", async () => {
+  const ev = await seedEvent({ tmId: "tm-cancel" });
+  const tm = { getEvent: vi.fn(async () => ({ tmId: "tm-cancel", priceLow: null, priceHigh: null, status: "cancelled" })) } as any;
+  const sg = { getEventStats: vi.fn() } as any;
+  await runPollCycle(db, tm, sg);
+  const [row] = await db.select().from(events);
+  expect(row.eventStatus).toBe("canceled"); // TM "cancelled" mapped to "canceled"
+  // undo the 9-min lease; the row must now be excluded by the canceled status alone
+  await db.update(eventSourceState).set({ nextPollAt: new Date(Date.now() - 1000) }).where(sql`event_id = ${ev.id}`);
+  expect(await claimDueRows(db)).toHaveLength(0);
+});
+
 test("subrequest budget: 45 claimed rows -> exactly 45 fetches", async () => {
   for (let i = 0; i < 50; i++) await seedEvent();
   const tm = { getEvent: vi.fn(async () => ({ priceLow: 1, priceHigh: 2 })) } as any;

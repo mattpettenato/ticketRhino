@@ -1,0 +1,2 @@
+ALTER TABLE "event_source_state" ADD CONSTRAINT "ess_source_ck" CHECK ("event_source_state"."source" IN ('tm', 'seatgeek'));--> statement-breakpoint
+ALTER TABLE "price_snapshots" ADD CONSTRAINT "snap_source_ck" CHECK ("price_snapshots"."source" IN ('tm', 'seatgeek'));

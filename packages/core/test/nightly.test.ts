@@ -41,7 +41,7 @@ test("snapshots older than 90 days deleted", async () => {
   expect(await db.select().from(priceSnapshots)).toHaveLength(1);
 });
 
-test("seed refresh fills up to budget, never beyond, attempts SG match per new event", async () => {
+test("seed refresh fills up to budget, never beyond; new seeds matched on NEXT night's retry pass", async () => {
   const tm = { popular: vi.fn().mockResolvedValue(
     Array.from({ length: SEED_BUDGET + 10 }, (_, i) => tmEv(i))) } as any;
   const sg = { searchCandidates: vi.fn().mockResolvedValue([]) } as any;
@@ -49,9 +49,34 @@ test("seed refresh fills up to budget, never beyond, attempts SG match per new e
   const seeds = await db.select().from(events);
   expect(seeds).toHaveLength(SEED_BUDGET);
   expect(seeds.every((s) => s.isSeed && s.pollingEnabled)).toBe(true);
-  expect(sg.searchCandidates).toHaveBeenCalledTimes(SEED_BUDGET);
+  // Seed refresh no longer matches inline — the retry pass ran BEFORE refresh over an empty DB,
+  // so nothing was matched this run; these seeds get matched on the next nightly.
+  expect(sg.searchCandidates).toHaveBeenCalledTimes(0);
   const tmStates = (await db.select().from(eventSourceState)).filter((s) => s.source === "tm");
   expect(tmStates).toHaveLength(SEED_BUDGET);
+});
+
+test("full seed refresh stays within the CF subrequest budget (all writes batched)", async () => {
+  // Count every db statement (each = 1 CF subrequest under neon-http) + external fetches.
+  let stmts = 0;
+  const counting = new Proxy(db, {
+    get(t: any, p) {
+      const v = t[p];
+      if (typeof v === "function" && ["execute", "insert", "select", "update", "delete"].includes(String(p)))
+        return (...a: any[]) => { stmts++; return v.apply(t, a); };
+      return v;
+    },
+  });
+  const tm = { popular: vi.fn().mockResolvedValue(
+    Array.from({ length: SEED_BUDGET + 10 }, (_, i) => tmEv(i))) } as any;
+  const sg = { searchCandidates: vi.fn().mockResolvedValue([]) } as any;
+  await runNightly(counting as any, tm, sg);
+  const fetches = tm.popular.mock.calls.length + sg.searchCandidates.mock.calls.length;
+  // Fixed cost regardless of seed count: past-lifecycle 1 + TTL 1 + retry-select 1 + seed-count 1
+  //   + tm.popular 1 + existing-select 1 + batched-upsert 1 + batched-source-insert 1 = 8.
+  expect(stmts + fetches).toBe(8);
+  expect(stmts + fetches).toBeLessThanOrEqual(45);
+  expect(await db.select().from(events)).toHaveLength(SEED_BUDGET);
 });
 
 test("seed budget counts is_seed flips, not just inserts — never exceeds budget", async () => {
@@ -73,8 +98,13 @@ test("seed budget counts is_seed flips, not just inserts — never exceeds budge
   expect(count).toBe(SEED_BUDGET);
 });
 
-test("per-event match failure is isolated: other events + retry pass still run", async () => {
-  const tm = { popular: vi.fn().mockResolvedValue([tmEv(0), tmEv(1), tmEv(2)]) } as any;
+test("per-event SG match failure is isolated: other events in the retry pass still run", async () => {
+  // 3 polling-enabled, unmatched events for the retry pass; ev0's SG search throws.
+  await db.insert(events).values([0, 1, 2].map((i) => ({
+    tmId: `tm-${i}`, name: `Show ${i}`, artist: `Artist ${i}`, startsAt: future,
+    isSeed: true, pollingEnabled: true,
+  })));
+  const tm = { popular: vi.fn().mockResolvedValue([]) } as any;
   const sg = {
     searchCandidates: vi.fn().mockImplementation((artist: string) => {
       if (artist === "Artist 0") throw new Error("network boom");
@@ -82,8 +112,8 @@ test("per-event match failure is isolated: other events + retry pass still run",
     }),
   } as any;
   await expect(runNightly(db, tm, sg)).resolves.toBeUndefined();
-  // All 3 events attempted in the seed loop despite ev0 throwing; ev0 (still unmatched) retried once more.
-  expect(sg.searchCandidates).toHaveBeenCalledTimes(4);
+  // All 3 attempted despite ev0 throwing; the throw is caught per-event, run completes.
+  expect(sg.searchCandidates).toHaveBeenCalledTimes(3);
   expect(await db.select().from(events)).toHaveLength(3);
 });
 

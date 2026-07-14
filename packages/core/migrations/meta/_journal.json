@@ -15,6 +15,13 @@
       "when": 1784009207466,
       "tag": "0001_chief_red_skull",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784014857542,
+      "tag": "0002_curved_stardust",
+      "breakpoints": true
     }
   ]
 }
