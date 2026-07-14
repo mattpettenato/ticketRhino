@@ -55,7 +55,7 @@ Cloudflare Workers free plan: **50 subrequests per invocation**. 150 events × 2
 
 ### Quota + throughput budget (documented in code, enforced by `next_poll_at`)
 All caps are stated in **source-rows** (one row = one event × one source = one API call).
-- Demand: TM 150 × 12/day = 1,800 + seed refresh ~50 ≈ 1,850 of 5,000/day ✓ · SeatGeek 150 × 24 = 3,600/day ✓ · total 5,450 source-polls/day
+- Demand: TM 150 × 12/day = 1,800 + seed refresh ~50 ≈ 1,850 of 5,000/day ✓ (live search shares the remainder — cached, hobby-scale) · SeatGeek 150 × 24 = 3,600/day + match calls (per-track + ≤25 nightly retries) ✓ · total ≈ 5,450 source-polls/day. SG figure is an upper bound — unmatched events have no SG row, so real SG load runs lower.
 - Capacity: 144 runs/day × 45 rows = 6,480/day → ~19% headroom for retries/backoff ✓
 
 ## 4. Data model (Neon Postgres, Drizzle ORM)
@@ -67,7 +67,7 @@ events
   sg_id             text NULL, UNIQUE WHERE NOT NULL
   name, artist      text
   venue, city       text
-  event_tz          text                -- IANA tz for "today" price-move calcs
+  event_tz          text                -- IANA tz, DISPLAY ONLY (all signal windows are rolling UTC)
   starts_at         timestamptz
   event_status      text                -- upcoming | rescheduled | canceled | past
   artwork_url       text
@@ -99,9 +99,10 @@ price_snapshots
   id                bigserial PK
   event_id          int FK
   source            text                -- tm | seatgeek
-  price_low, price_avg, price_high  numeric(10,2)
+  price_low, price_high  numeric(10,2)
+  price_avg         numeric(10,2) NULL  -- resale only; TM gives a face-value RANGE, no average — TM rows store low/high, avg NULL
   listing_count     int NULL            -- resale only
-  currency          char(3) DEFAULT 'USD'
+  currency          char(3) DEFAULT 'USD'   -- V1 is US-only (TM queries filtered countryCode=US); column future-proofs
   poll_bucket       timestamptz         -- date_trunc('hour', now())
   fetched_at        timestamptz DEFAULT now()   -- DB clock, informational
   UNIQUE (event_id, source, poll_bucket)        -- true idempotency key
@@ -125,23 +126,33 @@ price_snapshots
      ORDER BY ess.next_poll_at LIMIT 45 FOR UPDATE SKIP LOCKED)
    RETURNING event_id, source, ...
    ```
+   Note the explicit join condition — `events` PK is `id`, so `USING (event_id)` would not compile.
    The 9-minute lease doubles as the overlap guard: concurrent/overlapping runs claim disjoint rows (`SKIP LOCKED`), and a crashed run's rows simply come due again next cycle. Works over `@neondatabase/serverless` HTTP driver — no session-scoped advisory lock needed (that driver is connection-per-query, so advisory locks would silently no-op).
-2. Per claimed row: fetch API (exponential backoff on 429/5xx within the run's subrequest budget; give up → row stays leased 9 min, retried next run) → upsert snapshot (`ON CONFLICT (event_id, source, poll_bucket) DO NOTHING` — conflict still counts as success; cadence governs frequency, the bucket only dedupes overlap) → update `last_polled_at`, set `next_poll_at` = now() + 2h (TM) / + 1h (SG), **error_count = 0 on success** / +1 on failure — commit per row as you go.
+2. Fetch all claimed rows' APIs **concurrently** (`Promise.all` in chunks of ~10; exponential backoff on 429/5xx within the run's budget; a row that gives up stays leased 9 min and is retried next run). Concurrency keeps wall-clock at seconds, not 45 × sequential latency.
+3. Write results in **exactly two batched statements** (NOT per-row — 45 fetches + 45 inserts + 45 updates ≈ 136 subrequests would blow the 50 limit):
+   - one multi-row `INSERT … ON CONFLICT (event_id, source, poll_bucket) DO NOTHING` for all snapshots (conflict counts as success; cadence governs frequency, the bucket only dedupes overlap)
+   - one multi-row `UPDATE event_source_state` setting per-row `last_polled_at`, `next_poll_at` = now() + 2h (TM) / + 1h (SG), `error_count` = 0 on success / +1 on failure
+   Subrequest count: 1 claim + 45 fetches + 2 writes = 48 ≤ 50 ✓. Crash-safety needs no per-row commits — the 9-min lease + idempotent poll_bucket already make a dead run fully recoverable.
 
 **Cron `0 5 * * *` (nightly):**
-- `event_status = 'past'`, `polling_enabled = false` where `starts_at < now() - interval '24 hours'`; delete their `watchlist_events` rows (frees cap slots; orphaned anon UUIDs clean themselves up this way as their events pass)
+- `event_status = 'past'`, `polling_enabled = false`, **`is_seed = false`** where `starts_at < now() - interval '24 hours'`; delete their `watchlist_events` rows (frees both user slots and seed budget; orphaned anon UUIDs clean themselves up this way as their events pass — without clearing `is_seed`, the 50-slot seed pool would silt up with past events and trending would ossify)
 - Delete `price_snapshots` older than 90 days
-- Refresh trending seed: TM popular query, fuzzy-match against existing, insert new with `is_seed = true` **only up to the 50-slot seed budget** (seed slots are reserved out of the 150 global cap: 50 seed + 100 user-tracked; calls counted in TM budget)
+- Refresh trending seed: TM popular query, fuzzy-match against existing, insert new with `is_seed = true` up to the 50-slot seed budget (`count(*) WHERE is_seed` — past events no longer count after the step above). If the budget is full of *future* seed events, skip — do not evict live seeds mid-cycle; slots recycle as events pass. Seed slots are reserved out of the 150 global cap: 50 seed + 100 user-tracked; calls counted in TM budget.
+- **SG match retry pass:** attempt SeatGeek matching for `polling_enabled` events with `sg_id IS NULL` and `matched_at` older than 24h, max 25/night (bounded; counted in SG budget)
 
 **Error recovery:** 3 consecutive failures → 6h cooldown → retry; `error_count` resets to 0 on any successful poll. Nothing is ever permanently dead.
 
-**Cross-source matching:** new event from one source fuzzy-matches candidates from the other on artist + venue + date (±1 day). Auto-link at `match_confidence >= 0.8`; below that, leave unlinked (single-source display). `manual`/`exact_id` matches are never overwritten by `fuzzy`. V1 discovers events via TM only — SeatGeek-only events are intentionally out of scope (SG is matched *to* TM events, not discovered independently). Artwork/genre: TM values win; SG fills nulls only.
+**Cross-source matching — trigger and algorithm** (without an explicit trigger nothing ever sets `sg_id` and the resale feature is structurally dead):
+- **Trigger:** whenever an `events` row is created (Track button or seed refresh), the creating code immediately calls the SeatGeek event search API (one call: artist + date window; counted in SG budget) and attempts the match. Failures/no-hits set `matched_at = now()` and are retried by the nightly SG match pass (§ above) — so a temporary SG outage degrades to "resale appears within a day", never "resale never appears".
+- **Algorithm:** candidate scores on artist + venue + date (±1 day). Auto-link at `match_confidence >= 0.8` → set `sg_id`, create the `('seatgeek')` source-state row. Below 0.8: leave unlinked (single-source display). `manual`/`exact_id` matches are never overwritten by `fuzzy`.
+- V1 discovers events via TM only — SeatGeek-only events are intentionally out of scope (SG is matched *to* TM events, not discovered independently). Artwork/genre: TM values win; SG fills nulls only.
 
 ## 6. Tracking flow
 
 - **Polling set** = curated trending seed (reserved 50 slots) + user-tracked events (100 slots). Global cap 150; per anon UUID cap 20. `polling_enabled` is a maintained invariant: `is_seed OR EXISTS(watchlist_events)` — untracking only disables polling when the last watcher leaves AND the event isn't seed.
 - **Page views NEVER mutate the polling set** (quota-bomb guard — top finding of both reviews).
-- Track button, cap-full behavior (user pool of 100 full): first evict tracked events whose `starts_at < now()` (started/past events are evictable even inside the poller's 24h grace window — the grace only keeps *polling* alive, not the slot claim); if still full, reject with "Watchlist full" message. Tracking an already-polled event (seed or another user's) always succeeds — it just adds a watchlist row, no new slot. No silent eviction of other users' picks.
+- **Track is one transaction** (concurrency-safe cap enforcement): insert `events` row if missing → SG match attempt → insert source-state rows → cap check → insert watchlist row. The cap counts **distinct polled events in the user pool** (`polling_enabled AND NOT is_seed`), not watchlist rows — so tracking an already-polled event (seed or another user's) always succeeds without consuming a slot.
+- Cap-full behavior (user pool of 100 distinct events full): first run the started-events purge — delete watchlist rows *for all users* on events whose `starts_at < now()`, flipping their `polling_enabled` off per the invariant. This is the nightly cleanup applied early, not "silent eviction": started events were hours from automatic removal anyway, and the no-silent-eviction rule protects only *future* events. If still full, reject with "Watchlist full" message. Future events tracked by other users are never touched.
 - Anonymous identity: UUID minted on first visit, stored cookie + localStorage, watchlist persisted server-side keyed by UUID. Clearing both forks identity — accepted for V1; orphaned watchlist rows are purged when their events pass (nightly job), so squatted slots self-free.
 
 ## 7. Pages & UI
@@ -159,10 +170,10 @@ price_snapshots
 2. **Event detail** — hero artwork w/ title overlay; signal chip row ("↓ Lowest in 30 days") + staleness badge ("updated 42 min ago"); PRIMARY row (TM face range) + RESALE row (SG from/avg/high + listing count) as separate labeled cards; 30-day resale-low chart; "history building since <date>" caption; Track button
 3. **Watchlist** — tracked events list, sorted by biggest 24h movers; empty state → CTA to trending
 
-**Signals (data-gated — never shown without enough history; all windows are rolling UTC intervals from `now()`, not calendar days — `event_tz` is display-only):**
-- "↓/↑ N% this week" — requires ≥7 days of snapshots
-- "Lowest price in 30 days" — requires ≥14 days
-- 24h delta on cards — requires ≥2 buckets ≥20h apart within the rolling 24h window
+**Signals (data-gated — never shown without enough history; all windows are rolling UTC intervals from `now()`, not calendar days — `event_tz` is display-only). All computed on resale (SeatGeek) `price_low`:**
+- "↓/↑ N% this week" — requires ≥7 days of snapshots. `(latest_low − low_7d_ago) / low_7d_ago`, where `low_7d_ago` = the snapshot bucket closest to now−7d
+- "Lowest price in 30 days" — requires ≥14 days. Shown when `latest_low <= min(price_low over last 30d)`
+- 24h delta on cards — requires ≥2 buckets ≥20h apart within the rolling 24h window. `(latest_low − oldest_low_in_window) / oldest_low_in_window`
 
 **Error/empty states:**
 - Search no results → "Nothing found — try artist or venue name"
@@ -177,7 +188,8 @@ price_snapshots
 ## 8. Read path (Next.js)
 
 - Server components query Neon directly via Drizzle (`@neondatabase/serverless` HTTP driver)
-- Search: TM Discovery live search (server-side, cached 5 min via Next fetch cache). Merge rule: results keyed by `tm_id` — if a local `events` row with that `tm_id` exists, overlay its data (tracked state, snapshot prices, sg link); otherwise show the raw TM result. No fuzzy matching at search time; an event enters the DB only when tracked or seeded.
+- Search: TM Discovery live search (server-side, `countryCode=US`, cached 5 min via Next fetch cache). Merge rule: results keyed by `tm_id` — if a local `events` row with that `tm_id` exists, overlay its data (tracked state, snapshot prices, sg link); otherwise show the raw TM result. No fuzzy matching at search time; an event enters the DB only when tracked or seeded. Search traffic shares the TM 5k/day quota outside the poller's budget — the 5-min cache plus hobby-scale traffic keeps it marginal; add per-IP throttling only if quota monitoring shows pressure.
+- **Event detail for an untracked search result** (no DB row): render live — fetch TM event detail server-side (cached 5 min), show the primary row, "no resale data yet", no chart, and "Track to start collecting price history". The DB row is created only by Track (§6). No stub rows from navigation.
 - Event detail: latest snapshot per source + windowed history aggregates
 - No client-side API keys ever; all upstream calls server-side
 
