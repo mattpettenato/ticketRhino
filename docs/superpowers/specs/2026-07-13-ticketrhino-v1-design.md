@@ -56,7 +56,7 @@ Cloudflare Workers free plan: **50 subrequests per invocation**. 150 events × 2
 
 ### Quota + throughput budget (documented in code, enforced by `next_poll_at`)
 All caps are stated in **source-rows** (one row = one event × one source = one API call).
-- Demand: TM 150 × 12/day = 1,800 + seed refresh ~50 ≈ 1,850 of 5,000/day ✓ (live search shares the remainder — cached, hobby-scale) · SeatGeek 150 × 24 = 3,600/day + match calls (per-track + ≤25 nightly retries) ✓ · total ≈ 5,450 source-polls/day. SG figure is an upper bound — unmatched events have no SG row, so real SG load runs lower.
+- Demand: TM 150 × 12/day = 1,800 + seed refresh ~50 ≈ 1,850 of 5,000/day ✓ (live search shares the remainder — cached, hobby-scale) · SeatGeek 150 × 24 = 3,600/day + match calls (per-track + ≤9 nightly retries) ✓ _[post-review amendment] nightly retry pass is SG_RETRY_LIMIT=9 (was ≤25): sized so statements + budgeted fetches ≤45 CF subrequests, see nightly.ts_ · total ≈ 5,450 source-polls/day. SG figure is an upper bound — unmatched events have no SG row, so real SG load runs lower.
 - Capacity: 144 runs/day × 45 rows = 6,480/day → ~19% headroom for retries/backoff ✓
 
 ## 4. Data model (Neon Postgres, Drizzle ORM)

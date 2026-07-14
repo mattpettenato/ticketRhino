@@ -1,5 +1,6 @@
 import { and, eq, isNull, or } from "drizzle-orm";
 import { events, eventSourceState } from "./schema";
+import type { FetchBudget } from "./backoff";
 import type { SgCandidate, sgClient } from "./sg";
 
 export const MATCH_THRESHOLD = 0.8;
@@ -32,11 +33,11 @@ export function scoreCandidate(
 }
 
 export async function matchSeatGeek(
-  db: any, eventId: number, sg: ReturnType<typeof sgClient>,
+  db: any, eventId: number, sg: ReturnType<typeof sgClient>, budget?: FetchBudget,
 ): Promise<boolean> {
   const [ev] = await db.select().from(events).where(eq(events.id, eventId));
   if (!ev || ev.sgId) return !!ev?.sgId;
-  const candidates = await sg.searchCandidates(ev.artist ?? ev.name, ev.startsAt);
+  const candidates = await sg.searchCandidates(ev.artist ?? ev.name, ev.startsAt, budget);
   const scored = candidates
     .map((c: SgCandidate) => ({ c, score: scoreCandidate(ev, c) }))
     .sort((a: any, b: any) => b.score - a.score)[0];

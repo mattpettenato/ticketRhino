@@ -30,13 +30,13 @@ export function sgClient(clientId: string, fetchFn: typeof fetch = fetch) {
       const body = await get(`/events/${encodeURIComponent(sgId)}`, {}, budget);
       return body?.id ? parseStats(body) : null;
     },
-    async searchCandidates(artistOrName: string, around: Date): Promise<SgCandidate[]> {
+    async searchCandidates(artistOrName: string, around: Date, budget?: FetchBudget): Promise<SgCandidate[]> {
       const day = 86_400_000;
       const gte = new Date(around.getTime() - day).toISOString().slice(0, 10);
       const lte = new Date(around.getTime() + day).toISOString().slice(0, 10);
       const body = await get("/events", {
         q: artistOrName, "datetime_utc.gte": gte, "datetime_utc.lte": lte, per_page: "10",
-      });
+      }, budget);
       return (body?.events ?? [])
         .filter((e: any) => e?.id && e?.datetime_utc)
         .map((e: any) => ({

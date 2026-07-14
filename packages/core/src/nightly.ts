@@ -1,24 +1,30 @@
 import { eq, inArray, sql } from "drizzle-orm";
 import { events, eventSourceState } from "./schema";
 import { matchSeatGeek } from "./match";
+import type { FetchBudget } from "./backoff";
 import type { TmEvent, tmClient } from "./tm";
 import type { sgClient } from "./sg";
 
 export const SEED_BUDGET = 50; // reserved out of the 150 global cap (spec §6)
 
 // Nightly CF subrequest budget (neon-http = 1 subrequest per statement; hard CF limit is 50,
-// we target ≤45 for headroom). Cost of a full nightly run:
-//   past-lifecycle 1 + snapshot-TTL 1 + retry-pass-select 1
-//   + seed-refresh 5 (seed-count 1 + tm.popular 1 + existing-select 1 + batched-upsert 1
-//                     + batched-source-insert 1)
-//   = 8 fixed subrequests, regardless of how many seeds are refreshed (all writes are batched).
-// Each SG retry attempt costs ≤4 subrequests (event-select 1 + sg.searchCandidates fetch 1
-//   + update-events 1 + insert-source-state 1). So:
-//   8 + 4·SG_RETRY_LIMIT ≤ 45  →  SG_RETRY_LIMIT ≤ 9.25  →  9  (worst case 8 + 36 = 44 ≤ 45).
-// The spec's original LIMIT 25 assumed the run fit the budget; it does not — the 50-subrequest
-// hard limit governs, so the retry pass is sized from the arithmetic above. Unmatched events
-// accumulate across nights, so a smaller per-night limit is fine.
+// we target ≤45 for headroom). A subrequest is either a DB statement OR an external fetch.
+// DB statements (always issued — NOT budgeted):
+//   fixed 7: past-lifecycle 1 + snapshot-TTL 1 + retry-pass-select 1 + seed-count 1
+//            + existing-select 1 + batched-upsert 1 + batched-source-insert 1
+//            (fixed regardless of seed count — all writes are batched).
+//   per SG retry ≤3: event-select 1 + update-events 1 + insert-source-state 1 (on match).
+//   worst-case statements = 7 + 3·SG_RETRY_LIMIT = 7 + 27 = 34.
+// Fetches (tm.popular + one sg.searchCandidates per retry, EACH up to 3 backoff tries on 5xx —
+//   that's the unbudgeted blow-up: 9 retries × 3 tries + popular × 3 = 30 fetches by itself).
+//   A shared FetchBudget caps TOTAL fetches this run; once exhausted a call simply doesn't fetch
+//   (returns null → treated as no-match, DB statements still run). Total ≤ 34 + budget ≤ 45
+//   →  budget ≤ 11. Happy path needs popular 1 + 9 searches = 10 ≤ 11 (one spare retry attempt).
+// SG_RETRY_LIMIT: the spec's original LIMIT 25 assumed the run fit the budget; it does not — the
+//   50-subrequest hard limit governs. Unmatched events accumulate across nights, so a smaller
+//   per-night limit is fine.
 export const SG_RETRY_LIMIT = 9;
+export const NIGHTLY_FETCH_BUDGET = 11;
 
 // Refresh TM-sourced mutable display fields on conflict; PRESERVE the monotonic is_seed /
 // polling_enabled OR-merge (a row never loses seed/polling status via an upsert). The events
@@ -51,6 +57,7 @@ export async function upsertTmEvent(db: any, ev: TmEvent, opts: { isSeed: boolea
 export async function runNightly(
   db: any, tm: ReturnType<typeof tmClient>, sg: ReturnType<typeof sgClient>,
 ): Promise<void> {
+  const budget: FetchBudget = { remaining: NIGHTLY_FETCH_BUDGET }; // shared across all fetches this run
   // 1. Past-event lifecycle: free user slots AND seed budget (is_seed cleared — spec §5 nightly)
   await db.execute(sql`
     WITH aged AS (
@@ -73,7 +80,7 @@ export async function runNightly(
     ORDER BY matched_at NULLS FIRST LIMIT ${SG_RETRY_LIMIT}
   `)).rows as { id: number }[];
   for (const { id } of unmatched) {
-    try { await matchSeatGeek(db, id, sg); } catch { /* per-event isolation — next night retries */ }
+    try { await matchSeatGeek(db, id, sg, budget); } catch { /* per-event isolation — next night retries */ }
   }
 
   // 4. Seed refresh up to budget; skip if full of future seeds — never evict live seeds.
@@ -81,7 +88,7 @@ export async function runNightly(
   const [{ count }] = (await db.execute(sql`SELECT count(*)::int AS count FROM events WHERE is_seed`)).rows;
   const room = SEED_BUDGET - Number(count);
   if (room > 0) {
-    const popular = await tm.popular(SEED_BUDGET + 10);
+    const popular = await tm.popular(SEED_BUDGET + 10, budget);
     if (popular.length) {
       const tmIds = popular.map((e) => e.tmId);
       const existing = await db.select({ tmId: events.tmId, isSeed: events.isSeed })
@@ -91,8 +98,11 @@ export async function runNightly(
       // Queue popular in order; every is_seed transition (new row OR existing non-seed) counts
       // against `room`. Already-seed events are refreshed but don't consume budget.
       const batch: TmEvent[] = [];
+      const seen = new Set<string>(); // dedupe: ON CONFLICT DO UPDATE can't hit the same tmId twice in one upsert
       let flips = 0;
       for (const ev of popular) {
+        if (seen.has(ev.tmId)) continue;
+        seen.add(ev.tmId);
         if (seedByTmId.get(ev.tmId) !== true) {
           if (flips >= room) continue;
           flips++;

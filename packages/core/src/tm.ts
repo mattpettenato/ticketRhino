@@ -41,8 +41,8 @@ export function tmClient(apiKey: string, fetchFn: typeof fetch = fetch) {
       const body = await get("/events.json", { keyword, size: "20", sort: "relevance,desc" });
       return (body?._embedded?.events ?? []).map(parseEvent).filter(Boolean) as TmEvent[];
     },
-    async popular(size: number): Promise<TmEvent[]> {
-      const body = await get("/events.json", { size: String(size), sort: "relevance,desc" });
+    async popular(size: number, budget?: FetchBudget): Promise<TmEvent[]> {
+      const body = await get("/events.json", { size: String(size), sort: "relevance,desc" }, budget);
       return (body?._embedded?.events ?? []).map(parseEvent).filter(Boolean) as TmEvent[];
     },
   };
