@@ -11,7 +11,7 @@ export function PriceRows({ primary, resale }: { primary: Primary; resale: Resal
           <div className="text-[10px] text-gray-500">face value range</div>
         </div>
         <div className="price-mono text-[15px] font-bold">
-          {primary?.low != null ? `$${primary.low}–$${primary.high}` : "—"}
+          {primary?.low != null ? (primary.high != null ? `$${primary.low}–$${primary.high}` : `$${primary.low}+`) : "—"}
         </div>
       </div>
       <div className="glass-card flex items-center justify-between p-3"

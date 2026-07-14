@@ -25,8 +25,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   const cards: CardData[] = results.map((r) => {
     const l = byTmId.get(r.tmId);
     if (l) {
-      // Local row: use eventCards helper data (price/delta from DB snapshots)
-      return localCardsByEventId.get(`/event/${l.id}`)!;
+      // Local row: use eventCards helper data (price/delta from DB snapshots);
+      // no resale snapshot yet → fall back to TM face price
+      const card = localCardsByEventId.get(`/event/${l.id}`)!;
+      return card.price != null ? card : { ...card, price: r.priceLow != null ? `$${r.priceLow}` : null };
     } else {
       // Untracked TM result: raw price, no delta
       return {
