@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+:root {
+  --bg-from: #1e1b4b;
+  --bg-to: #0c0a1d;
+  --emerald: #34d399;
+  --red: #f87171;
+  --peri: #818cf8;
+  --peri-light: #c7d2fe;
+}
+
+body {
+  background: radial-gradient(120% 120% at 20% 0%, var(--bg-from) 0%, var(--bg-to) 60%);
+  min-height: 100vh;
+  color: #e5e7eb;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 1rem;
+  backdrop-filter: blur(10px);
+}
+.headline-serif { font-family: Georgia, "Times New Roman", serif; font-style: italic; }
+.price-mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; }
+.label-caps { font-size: 0.625rem; letter-spacing: 0.15em; color: var(--peri-light); font-weight: 600; }
+.glow-emerald { box-shadow: 0 0 14px rgba(52, 211, 153, 0.4); }
