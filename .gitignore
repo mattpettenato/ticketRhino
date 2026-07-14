@@ -1,3 +1,7 @@
 .superpowers/
 .env*
 node_modules/
+.next/
+dist/
+.wrangler/
+*.local
