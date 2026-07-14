@@ -3,8 +3,6 @@ import { schema } from "@ticketrhino/core";
 import { getClients } from "@/lib/clients";
 import { CardData, EventCard } from "@/components/EventCard";
 
-export const dynamic = "force-dynamic";
-
 export default async function SearchPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const { q } = await searchParams;
   if (!q) return <p className="label-caps">SEARCH ARTIST, EVENT, VENUE</p>;
